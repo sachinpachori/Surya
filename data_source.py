@@ -44,6 +44,7 @@ YFINANCE_SYMBOLS = [
     "LT.NS",
     "BHARTIARTL.NS",
 ]
+YFINANCE_POLL_SYMBOLS = list(YFINANCE_SYMBOLS)
 YFINANCE_US_SYMBOLS = [
     "AAPL",
     "MSFT",
@@ -138,6 +139,44 @@ def get_hyperliquid_symbols() -> List[str]:
 
 
 def get_yfinance_symbols() -> List[str]:
+    cache_key = "nifty500_symbols"
+    with symbol_cache_lock:
+        cached = symbol_cache.get(cache_key)
+        if cached and time.time() - cached["timestamp"] < 86400:
+            return cached["symbols"]
+
+    urls = [
+        "https://archives.nseindia.com/content/indices/ind_nifty500list.csv",
+        "https://www.niftyindices.com/IndexConstituent/ind_nifty500list.csv",
+    ]
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "text/csv,application/csv,text/plain,*/*",
+        "Referer": "https://www.nseindia.com/",
+    }
+    for url in urls:
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            resp.raise_for_status()
+            from io import StringIO
+            df = pd.read_csv(StringIO(resp.text))
+            symbol_column = "Symbol" if "Symbol" in df.columns else df.columns[0]
+            symbols = []
+            for raw_symbol in df[symbol_column].dropna().astype(str):
+                symbol = raw_symbol.strip().upper()
+                if not symbol:
+                    continue
+                if not symbol.endswith(".NS"):
+                    symbol = f"{symbol}.NS"
+                symbols.append(symbol)
+            if symbols:
+                symbols = sorted(set(symbols))
+                with symbol_cache_lock:
+                    symbol_cache[cache_key] = {"symbols": symbols, "timestamp": time.time()}
+                return symbols
+        except Exception as exc:
+            print(f"nifty500 symbols error from {url} -> {exc}")
+
     return YFINANCE_SYMBOLS
 
 
@@ -596,7 +635,7 @@ def _yfinance_poller(queue: Queue, poll_interval: int = 10):
     # Poll latest price for configured yfinance symbols periodically
     while True:
         try:
-            for sym in YFINANCE_SYMBOLS + YFINANCE_US_SYMBOLS:
+            for sym in YFINANCE_POLL_SYMBOLS + YFINANCE_US_SYMBOLS:
                 try:
                     ticker = yf.Ticker(sym)
                     # try to get the most recent minute bar

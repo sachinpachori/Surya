@@ -190,6 +190,60 @@ function indicatorSeriesData(bars, spec) {
         const pivot = (last.high + last.low + last.close) / 3;
         return [[{ time: bars[0].time, value: pivot }, { time: last.time, value: pivot }]];
     }
+    if (spec.type === "fvg") {
+        const zones = [];
+        for (let index = 2; index < bars.length; index += 1) {
+            const first = bars[index - 2];
+            const third = bars[index];
+            if (first.high < third.low) {
+                zones.push({ start: bars[index - 1].time, end: third.time, top: third.low, bottom: first.high });
+            } else if (first.low > third.high) {
+                zones.push({ start: bars[index - 1].time, end: third.time, top: first.low, bottom: third.high });
+            }
+        }
+        return zones.slice(-24).flatMap((zone) => [
+            [{ time: zone.start, value: zone.top }, { time: zone.end, value: zone.top }],
+            [{ time: zone.start, value: zone.bottom }, { time: zone.end, value: zone.bottom }],
+        ]);
+    }
+    if (spec.type === "volumeProfile") {
+        const lows = bars.map((bar) => bar.low);
+        const highs = bars.map((bar) => bar.high);
+        const min = Math.min(...lows);
+        const max = Math.max(...highs);
+        if (!Number.isFinite(min) || !Number.isFinite(max) || min === max) return [];
+        const bucketCount = 48;
+        const bucketSize = (max - min) / bucketCount;
+        const buckets = Array.from({ length: bucketCount }, (_, index) => ({
+            price: min + bucketSize * (index + 0.5),
+            volume: 0,
+        }));
+        bars.forEach((bar) => {
+            const price = (bar.high + bar.low + bar.close) / 3;
+            const index = Math.max(0, Math.min(bucketCount - 1, Math.floor((price - min) / bucketSize)));
+            buckets[index].volume += bar.volume || 0;
+        });
+        const totalVolume = buckets.reduce((total, bucket) => total + bucket.volume, 0);
+        if (!totalVolume) return [];
+        const sorted = [...buckets].sort((a, b) => b.volume - a.volume);
+        const poc = sorted[0].price;
+        let valueAreaVolume = 0;
+        const valueBuckets = [];
+        for (const bucket of sorted) {
+            valueBuckets.push(bucket.price);
+            valueAreaVolume += bucket.volume;
+            if (valueAreaVolume >= totalVolume * 0.7) break;
+        }
+        const vah = Math.max(...valueBuckets);
+        const val = Math.min(...valueBuckets);
+        const start = bars[0].time;
+        const end = bars[bars.length - 1].time;
+        return [
+            [{ time: start, value: poc }, { time: end, value: poc }],
+            [{ time: start, value: vah }, { time: end, value: vah }],
+            [{ time: start, value: val }, { time: end, value: val }],
+        ];
+    }
     return [];
 }
 
@@ -390,12 +444,15 @@ function applyIndicators(state) {
         const dataSets = indicatorSeriesData(state.bars, spec);
         dataSets.forEach((data, offset) => {
             if (!data.length) return;
+            const isVolumeProfile = spec.type === "volumeProfile";
+            const isFvg = spec.type === "fvg";
             const series = state.chart.addLineSeries({
                 color: spec.color,
-                lineWidth: offset === 0 ? 2 : 1,
-                lineStyle: offset === 1 ? 2 : 0,
+                lineWidth: isVolumeProfile && offset === 0 ? 3 : offset === 0 ? 2 : 1,
+                lineStyle: isFvg ? 2 : isVolumeProfile && offset > 0 ? 1 : offset === 1 ? 2 : 0,
                 priceLineVisible: false,
-                lastValueVisible: false,
+                lastValueVisible: isVolumeProfile,
+                title: isVolumeProfile ? ["POC", "VAH", "VAL"][offset] : "",
             });
             series.setData(data);
             state.indicatorSeries.push(series);
