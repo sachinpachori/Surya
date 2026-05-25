@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Trading Dashboard</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=2" />
+    <script src="https://unpkg.com/lightweight-charts@4.0.0/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+    <div class="toolbar">
+        <div class="toolbar-left">
+            <div class="brand"><span></span>Live Multi-Chart Dashboard</div>
+            <div id="marketStrip" class="market-strip"></div>
+        </div>
+        <div class="toolbar-right">
+            <label for="chartCount">NUMBER OF CHARTS</label>
+            <select id="chartCount">
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="4">4</option>
+                <option value="6">6</option>
+                <option value="8">8</option>
+            </select>
+        </div>
+    </div>
+    <main>
+        <div id="chartGrid" class="chart-grid"></div>
+    </main>
+    <script src="/static/js/app.js?v=2"></script>
+</body>
+</html>
