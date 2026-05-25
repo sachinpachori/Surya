@@ -3,3 +3,4 @@ yfinance>=0.2.35
 pandas>=2.2.3
 websockets>=11.0.3
 requests>=2.31.0
+lxml>=5.2.1

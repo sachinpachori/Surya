@@ -45,6 +45,27 @@ YFINANCE_SYMBOLS = [
     "BHARTIARTL.NS",
 ]
 YFINANCE_POLL_SYMBOLS = list(YFINANCE_SYMBOLS)
+YFINANCE_INDIA_INDEX_SYMBOLS = [
+    "^NSEI",
+    "^NSEBANK",
+    "^CNXIT",
+    "^CNXAUTO",
+    "^CNXFMCG",
+    "^CNXMETAL",
+    "^CNXPHARMA",
+    "^CNXREALTY",
+    "^CNXENERGY",
+    "^CNXMEDIA",
+    "^CNXPSUBANK",
+    "^CNXFIN",
+    "^NSEMDCP50",
+    "NIFTY_MID_SELECT.NS",
+    "^BSESN",
+    "NIFTYBEES.NS",
+    "BANKBEES.NS",
+    "JUNIORBEES.NS",
+    "MID150BEES.NS",
+]
 YFINANCE_US_SYMBOLS = [
     "AAPL",
     "MSFT",
@@ -57,6 +78,56 @@ YFINANCE_US_SYMBOLS = [
     "NFLX",
     "SPY",
     "QQQ",
+]
+YFINANCE_US_POLL_SYMBOLS = list(YFINANCE_US_SYMBOLS)
+YFINANCE_US_INDEX_SYMBOLS = [
+    "^GSPC",
+    "^DJI",
+    "^IXIC",
+    "^NDX",
+    "^RUT",
+    "^VIX",
+    "^TNX",
+    "^IRX",
+    "^FVX",
+    "^TYX",
+    "SPY",
+    "QQQ",
+    "DIA",
+    "IWM",
+    "VOO",
+    "IVV",
+    "SPLG",
+    "VTI",
+    "RSP",
+    "SPYG",
+    "SPYV",
+    "TQQQ",
+    "SQQQ",
+    "UPRO",
+    "SPXU",
+]
+SP500_FALLBACK_SYMBOLS = [
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "AMZN",
+    "META",
+    "GOOGL",
+    "GOOG",
+    "BRK-B",
+    "AVGO",
+    "TSLA",
+    "JPM",
+    "LLY",
+    "V",
+    "UNH",
+    "XOM",
+    "MA",
+    "COST",
+    "WMT",
+    "PG",
+    "NFLX",
 ]
 BINANCE_SYMBOLS = [
     "BTCUSDT",
@@ -170,18 +241,55 @@ def get_yfinance_symbols() -> List[str]:
                     symbol = f"{symbol}.NS"
                 symbols.append(symbol)
             if symbols:
-                symbols = sorted(set(symbols))
+                symbols = YFINANCE_INDIA_INDEX_SYMBOLS + sorted(
+                    symbol for symbol in set(symbols) if symbol not in YFINANCE_INDIA_INDEX_SYMBOLS
+                )
                 with symbol_cache_lock:
                     symbol_cache[cache_key] = {"symbols": symbols, "timestamp": time.time()}
                 return symbols
         except Exception as exc:
             print(f"nifty500 symbols error from {url} -> {exc}")
 
-    return YFINANCE_SYMBOLS
+    return YFINANCE_INDIA_INDEX_SYMBOLS + YFINANCE_SYMBOLS
 
 
 def get_yfinance_us_symbols() -> List[str]:
-    return YFINANCE_US_SYMBOLS
+    cache_key = "sp500_symbols"
+    with symbol_cache_lock:
+        cached = symbol_cache.get(cache_key)
+        if cached and time.time() - cached["timestamp"] < 86400:
+            return cached["symbols"]
+
+    symbols = []
+    try:
+        from io import StringIO
+        resp = requests.get(
+            "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "text/html,*/*"},
+            timeout=12,
+        )
+        resp.raise_for_status()
+        tables = pd.read_html(StringIO(resp.text))
+        for table in tables:
+            if "Symbol" not in table.columns:
+                continue
+            for raw_symbol in table["Symbol"].dropna().astype(str):
+                symbol = raw_symbol.strip().upper().replace(".", "-")
+                if symbol:
+                    symbols.append(symbol)
+            break
+    except Exception as exc:
+        print(f"sp500 symbols error -> {exc}")
+
+    if not symbols:
+        symbols = SP500_FALLBACK_SYMBOLS
+
+    full_list = YFINANCE_US_INDEX_SYMBOLS + sorted(
+        symbol for symbol in set(symbols) if symbol not in YFINANCE_US_INDEX_SYMBOLS
+    )
+    with symbol_cache_lock:
+        symbol_cache[cache_key] = {"symbols": full_list, "timestamp": time.time()}
+    return full_list
 
 
 def get_binance_symbols() -> List[str]:
@@ -635,7 +743,7 @@ def _yfinance_poller(queue: Queue, poll_interval: int = 10):
     # Poll latest price for configured yfinance symbols periodically
     while True:
         try:
-            for sym in YFINANCE_POLL_SYMBOLS + YFINANCE_US_SYMBOLS:
+            for sym in YFINANCE_POLL_SYMBOLS + YFINANCE_US_POLL_SYMBOLS:
                 try:
                     ticker = yf.Ticker(sym)
                     # try to get the most recent minute bar
