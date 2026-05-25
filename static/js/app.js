@@ -129,6 +129,79 @@ function atrData(bars, period) {
     });
 }
 
+function dayBucket(time) {
+    return Math.floor(time / 86400);
+}
+
+function classicPivotSets(bars) {
+    if (bars.length < 2) return [];
+    const lastBucket = dayBucket(bars[bars.length - 1].time);
+    const previousDayBars = bars.filter((bar) => dayBucket(bar.time) < lastBucket);
+    let pivotBars = [];
+    if (previousDayBars.length) {
+        const previousBucket = dayBucket(previousDayBars[previousDayBars.length - 1].time);
+        pivotBars = previousDayBars.filter((bar) => dayBucket(bar.time) === previousBucket);
+    } else {
+        pivotBars = bars.slice(Math.max(0, bars.length - 30), Math.max(1, bars.length - 1));
+    }
+    if (!pivotBars.length) return [];
+
+    const high = Math.max(...pivotBars.map((bar) => bar.high));
+    const low = Math.min(...pivotBars.map((bar) => bar.low));
+    const close = pivotBars[pivotBars.length - 1].close;
+    const pivot = (high + low + close) / 3;
+    const range = high - low;
+    return [
+        { label: "R3", value: high + 2 * (pivot - low), color: "#f87171" },
+        { label: "R2", value: pivot + range, color: "#fb7185" },
+        { label: "R1", value: 2 * pivot - low, color: "#fda4af" },
+        { label: "P", value: pivot, color: "#e2e8f0", width: 3 },
+        { label: "S1", value: 2 * pivot - high, color: "#86efac" },
+        { label: "S2", value: pivot - range, color: "#4ade80" },
+        { label: "S3", value: low - 2 * (high - pivot), color: "#22c55e" },
+    ].filter((level) => Number.isFinite(level.value));
+}
+
+function fvgZones(bars) {
+    const zones = [];
+    const lastTime = bars[bars.length - 1].time;
+    for (let index = 2; index < bars.length; index += 1) {
+        const first = bars[index - 2];
+        const third = bars[index];
+        let zone = null;
+        if (first.high < third.low) {
+            zone = {
+                type: "Bull FVG",
+                start: bars[index - 1].time,
+                end: lastTime,
+                top: third.low,
+                bottom: first.high,
+                color: "#facc15",
+            };
+        } else if (first.low > third.high) {
+            zone = {
+                type: "Bear FVG",
+                start: bars[index - 1].time,
+                end: lastTime,
+                top: first.low,
+                bottom: third.high,
+                color: "#fb7185",
+            };
+        }
+        if (!zone) continue;
+        for (let futureIndex = index + 1; futureIndex < bars.length; futureIndex += 1) {
+            const future = bars[futureIndex];
+            const filled = zone.type === "Bull FVG" ? future.low <= zone.bottom : future.high >= zone.top;
+            if (filled) {
+                zone.end = future.time;
+                break;
+            }
+        }
+        if (zone.end > zone.start) zones.push(zone);
+    }
+    return zones.slice(-10);
+}
+
 function indicatorSeriesData(bars, spec) {
     if (!bars.length) return [];
     if (spec.type === "ema") return [emaData(bars, spec.period)];
@@ -186,25 +259,44 @@ function indicatorSeriesData(bars, spec) {
         }))];
     }
     if (spec.type === "pivots") {
-        const last = bars[bars.length - 1];
-        const pivot = (last.high + last.low + last.close) / 3;
-        return [[{ time: bars[0].time, value: pivot }, { time: last.time, value: pivot }]];
+        const start = bars[0].time;
+        const end = bars[bars.length - 1].time;
+        return classicPivotSets(bars).map((level) => ({
+            data: [{ time: start, value: level.value }, { time: end, value: level.value }],
+            color: level.color,
+            lineWidth: level.width || 2,
+            lineStyle: level.label === "P" ? 0 : 1,
+            lastValueVisible: true,
+            title: level.label,
+        }));
     }
     if (spec.type === "fvg") {
-        const zones = [];
-        for (let index = 2; index < bars.length; index += 1) {
-            const first = bars[index - 2];
-            const third = bars[index];
-            if (first.high < third.low) {
-                zones.push({ start: bars[index - 1].time, end: third.time, top: third.low, bottom: first.high });
-            } else if (first.low > third.high) {
-                zones.push({ start: bars[index - 1].time, end: third.time, top: first.low, bottom: third.high });
-            }
-        }
-        return zones.slice(-24).flatMap((zone) => [
-            [{ time: zone.start, value: zone.top }, { time: zone.end, value: zone.top }],
-            [{ time: zone.start, value: zone.bottom }, { time: zone.end, value: zone.bottom }],
-        ]);
+        return fvgZones(bars).flatMap((zone) => {
+            const midpoint = (zone.top + zone.bottom) / 2;
+            return [
+                {
+                    data: [{ time: zone.start, value: zone.top }, { time: zone.end, value: zone.top }],
+                    color: zone.color,
+                    lineWidth: 3,
+                    lineStyle: 0,
+                    title: zone.type,
+                },
+                {
+                    data: [{ time: zone.start, value: zone.bottom }, { time: zone.end, value: zone.bottom }],
+                    color: zone.color,
+                    lineWidth: 3,
+                    lineStyle: 0,
+                    title: zone.type,
+                },
+                {
+                    data: [{ time: zone.start, value: midpoint }, { time: zone.end, value: midpoint }],
+                    color: zone.color,
+                    lineWidth: 1,
+                    lineStyle: 2,
+                    title: "",
+                },
+            ];
+        });
     }
     if (spec.type === "volumeProfile") {
         const lows = bars.map((bar) => bar.low);
@@ -442,17 +534,19 @@ function applyIndicators(state) {
     indicatorGroups.flatMap((group) => group.items).forEach((spec) => {
         if (!state.indicators[spec.id] || spec.type === "volume") return;
         const dataSets = indicatorSeriesData(state.bars, spec);
-        dataSets.forEach((data, offset) => {
+        dataSets.forEach((entry, offset) => {
+            const data = Array.isArray(entry) ? entry : entry.data;
             if (!data.length) return;
             const isVolumeProfile = spec.type === "volumeProfile";
             const isFvg = spec.type === "fvg";
+            const options = Array.isArray(entry) ? {} : entry;
             const series = state.chart.addLineSeries({
-                color: spec.color,
-                lineWidth: isVolumeProfile && offset === 0 ? 3 : offset === 0 ? 2 : 1,
-                lineStyle: isFvg ? 2 : isVolumeProfile && offset > 0 ? 1 : offset === 1 ? 2 : 0,
+                color: options.color || spec.color,
+                lineWidth: options.lineWidth || (isVolumeProfile && offset === 0 ? 3 : offset === 0 ? 2 : 1),
+                lineStyle: options.lineStyle ?? (isFvg ? 0 : isVolumeProfile && offset > 0 ? 1 : offset === 1 ? 2 : 0),
                 priceLineVisible: false,
-                lastValueVisible: isVolumeProfile,
-                title: isVolumeProfile ? ["POC", "VAH", "VAL"][offset] : "",
+                lastValueVisible: options.lastValueVisible ?? isVolumeProfile,
+                title: options.title ?? (isVolumeProfile ? ["POC", "VAH", "VAL"][offset] : ""),
             });
             series.setData(data);
             state.indicatorSeries.push(series);
