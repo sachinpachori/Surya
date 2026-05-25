@@ -100,6 +100,16 @@ function lineData(values) {
     return values.filter((point) => Number.isFinite(point.value));
 }
 
+function effectiveVolume(bar, index = 0, bars = []) {
+    const rawVolume = Number(bar.volume);
+    if (Number.isFinite(rawVolume) && rawVolume > 0) return rawVolume;
+    const price = Math.max(Math.abs(bar.close || 0), 1);
+    const range = Math.max((bar.high || 0) - (bar.low || 0), Math.abs((bar.close || 0) - (bar.open || 0)));
+    const previousClose = index > 0 && bars[index - 1] ? bars[index - 1].close : bar.open;
+    const movement = Math.abs((bar.close || 0) - (previousClose || bar.open || 0));
+    return Math.max(1, ((range + movement) / price) * 1000000);
+}
+
 function emaData(bars, period) {
     const k = 2 / (period + 1);
     let ema = null;
@@ -208,9 +218,9 @@ function indicatorSeriesData(bars, spec) {
     if (spec.type === "vwap") {
         let pv = 0;
         let volume = 0;
-        return [lineData(bars.map((bar) => {
+        return [lineData(bars.map((bar, index) => {
             const typical = (bar.high + bar.low + bar.close) / 3;
-            const v = bar.volume || 0;
+            const v = effectiveVolume(bar, index, bars);
             pv += typical * v;
             volume += v;
             return { time: bar.time, value: volume ? pv / volume : typical };
@@ -310,10 +320,10 @@ function indicatorSeriesData(bars, spec) {
             price: min + bucketSize * (index + 0.5),
             volume: 0,
         }));
-        bars.forEach((bar) => {
+        bars.forEach((bar, barIndex) => {
             const price = (bar.high + bar.low + bar.close) / 3;
             const index = Math.max(0, Math.min(bucketCount - 1, Math.floor((price - min) / bucketSize)));
-            buckets[index].volume += bar.volume || 0;
+            buckets[index].volume += effectiveVolume(bar, barIndex, bars);
         });
         const totalVolume = buckets.reduce((total, bucket) => total + bucket.volume, 0);
         if (!totalVolume) return [];
@@ -516,9 +526,9 @@ function createChart(state) {
 
 function setVolume(state) {
     const active = state.indicators.volume !== false;
-    state.volumeSeries.setData(active ? state.bars.map((bar) => ({
+    state.volumeSeries.setData(active ? state.bars.map((bar, index) => ({
         time: bar.time,
-        value: bar.volume || 0,
+        value: effectiveVolume(bar, index, state.bars),
         color: bar.close >= bar.open ? "rgba(33, 201, 151, 0.32)" : "rgba(242, 79, 99, 0.32)",
     })) : []);
 }
